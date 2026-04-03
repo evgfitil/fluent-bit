@@ -54,6 +54,7 @@ extern void cmt_encode_opentelemetry_destroy(cfl_sds_t text);
 
 #include "opentelemetry.h"
 #include "opentelemetry_conf.h"
+#include "opentelemetry_metadata.h"
 #include "opentelemetry_utils.h"
 
 static int is_http_status_code_retrayable(int http_code)
@@ -208,6 +209,8 @@ int opentelemetry_legacy_post(struct opentelemetry_context *ctx,
     struct flb_config_map_val *mv;
     struct flb_http_client    *c;
     flb_sds_t                 signature = NULL;
+    flb_sds_t                 meta_token = NULL;      /* owned copy; freed in cleanup */
+    flb_sds_t                 meta_token_view = NULL; /* temporary view; not owned */
 
     compressed = FLB_FALSE;
 
@@ -340,7 +343,51 @@ int opentelemetry_legacy_post(struct opentelemetry_context *ctx,
     /* Map debug callbacks */
     flb_http_client_debug(c, ctx->ins->callback);
 
-    ret = flb_http_do_with_oauth2(c, &b_sent, ctx->oauth2_ctx);
+    /*
+     * For metadata token mode, inject the Bearer token directly and handle
+     * 401 without a force-refresh POST: the metadata endpoint accepts only
+     * GET, so flb_http_do_with_oauth2's inline retry (POST) would always
+     * fail. On 401, invalidate and return FLB_RETRY; the next flush will
+     * re-fetch the token via flb_otel_metadata_token_refresh().
+     */
+    if (ctx->metadata_token_url && ctx->oauth2_ctx != NULL) {
+        /*
+         * Hold metadata_mutex while copying the token pointer to prevent a
+         * concurrent flb_otel_metadata_token_refresh() call in another worker
+         * from freeing access_token between flb_oauth2_get_access_token()
+         * releasing oauth2_ctx->lock and flb_sds_create() copying the value.
+         */
+        pthread_mutex_lock(&ctx->metadata_mutex);
+        if (flb_oauth2_get_access_token(ctx->oauth2_ctx,
+                                        &meta_token_view, FLB_FALSE) != 0
+            || meta_token_view == NULL) {
+            pthread_mutex_unlock(&ctx->metadata_mutex);
+            flb_plg_error(ctx->ins, "metadata: failed to get access token");
+            out_ret = FLB_RETRY;
+            goto cleanup;
+        }
+        meta_token = flb_sds_create(meta_token_view);
+        pthread_mutex_unlock(&ctx->metadata_mutex);
+        if (!meta_token) {
+            flb_plg_error(ctx->ins, "metadata: out of memory for access token");
+            out_ret = FLB_RETRY;
+            goto cleanup;
+        }
+        if (flb_http_bearer_auth(c, meta_token) != 0) {
+            flb_plg_error(ctx->ins, "metadata: failed to set bearer auth");
+            out_ret = FLB_RETRY;
+            goto cleanup;
+        }
+        ret = flb_http_do(c, &b_sent);
+        if (ret == 0 && c->resp.status == 401) {
+            flb_oauth2_invalidate_token(ctx->oauth2_ctx);
+            out_ret = FLB_RETRY;
+            goto cleanup;
+        }
+    }
+    else {
+        ret = flb_http_do_with_oauth2(c, &b_sent, ctx->oauth2_ctx);
+    }
 
     if (ret == 0) {
         /*
@@ -406,6 +453,10 @@ cleanup:
         flb_free(final_body);
     }
 
+    if (meta_token) {
+        flb_sds_destroy(meta_token);
+    }
+
     /* Destroy HTTP client context */
     flb_http_client_destroy(c);
 
@@ -422,6 +473,7 @@ int opentelemetry_post(struct opentelemetry_context *ctx,
                        const char *grpc_uri)
 {
     flb_sds_t                 oauth2_token;
+    flb_sds_t                 oauth2_token_view;
     const char               *compression_algorithm;
     uint32_t                  wire_message_length;
     size_t                    grpc_body_length;
@@ -433,6 +485,7 @@ int opentelemetry_post(struct opentelemetry_context *ctx,
     int                       result;
 
     oauth2_token = NULL;
+    oauth2_token_view = NULL;
 
     if (!ctx->enable_http2_flag) {
         return opentelemetry_legacy_post(ctx,
@@ -556,11 +609,34 @@ int opentelemetry_post(struct opentelemetry_context *ctx,
     }
 
     if (ctx->oauth2_ctx != NULL && ctx->oauth2_config.enabled == FLB_TRUE) {
+        /*
+         * In metadata token mode, hold metadata_mutex across get+copy to
+         * prevent a concurrent flb_otel_metadata_token_refresh() in another
+         * worker from freeing access_token between the lock release inside
+         * flb_oauth2_get_access_token() and the flb_sds_create() copy.
+         */
+        if (ctx->metadata_token_url) {
+            pthread_mutex_lock(&ctx->metadata_mutex);
+        }
         result = flb_oauth2_get_access_token(ctx->oauth2_ctx,
-                                             &oauth2_token,
+                                             &oauth2_token_view,
                                              FLB_FALSE);
-        if (result != 0 || oauth2_token == NULL) {
+        if (result != 0 || oauth2_token_view == NULL) {
+            if (ctx->metadata_token_url) {
+                pthread_mutex_unlock(&ctx->metadata_mutex);
+            }
             flb_plg_error(ctx->ins, "failed to obtain oauth2 access token");
+            flb_http_client_request_destroy(request, FLB_TRUE);
+
+            return FLB_RETRY;
+        }
+
+        oauth2_token = flb_sds_create(oauth2_token_view);
+        if (ctx->metadata_token_url) {
+            pthread_mutex_unlock(&ctx->metadata_mutex);
+        }
+        if (!oauth2_token) {
+            flb_plg_error(ctx->ins, "failed to copy oauth2 access token");
             flb_http_client_request_destroy(request, FLB_TRUE);
 
             return FLB_RETRY;
@@ -568,6 +644,8 @@ int opentelemetry_post(struct opentelemetry_context *ctx,
 
         result = flb_http_request_set_parameters(request,
                     FLB_HTTP_CLIENT_ARGUMENT_BEARER_TOKEN(oauth2_token));
+        flb_sds_destroy(oauth2_token);
+        oauth2_token = NULL;
 
         if (result != 0) {
             flb_plg_error(ctx->ins, "error setting oauth2 authorization data");
@@ -1041,6 +1119,14 @@ static void cb_opentelemetry_flush(struct flb_event_chunk *event_chunk,
                                    struct flb_config *config)
 {
     int result = FLB_RETRY;
+    struct opentelemetry_context *ctx = out_context;
+
+    /* Refresh the metadata token before dispatching; no-op when not configured */
+    if (ctx->metadata_token_url) {
+        if (flb_otel_metadata_token_refresh(ctx) != 0) {
+            FLB_OUTPUT_RETURN(FLB_RETRY);
+        }
+    }
 
     if (event_chunk->type == FLB_INPUT_METRICS){
         result = process_metrics(event_chunk, out_flush, ins, out_context, config);
@@ -1278,6 +1364,27 @@ static struct flb_config_map config_map[] = {
      "Specify a Severity Number key"
     },
 
+
+    /*
+     * Metadata token auth
+     * -------------------
+     */
+    {
+     FLB_CONFIG_MAP_STR, "metadata_token_url", NULL,
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_url),
+     "URL to fetch the IAM token from a cloud metadata endpoint via HTTP GET"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metadata_token_header", NULL,
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_header),
+     "Optional HTTP header to include in the metadata token request "
+     "(e.g. \"Metadata-Flavor: Google\")"
+    },
+    {
+     FLB_CONFIG_MAP_INT, "metadata_token_refresh", "3600",
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_refresh),
+     "Maximum token refresh interval in seconds (default: 3600, must be > 60)"
+    },
 
     /* EOF */
     {0}

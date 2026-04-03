@@ -20,6 +20,8 @@
 #ifndef FLB_OUT_OPENTELEMETRY_H
 #define FLB_OUT_OPENTELEMETRY_H
 
+#include <pthread.h>
+
 #include <fluent-bit/flb_output_plugin.h>
 #include <fluent-bit/flb_oauth2.h>
 #include <fluent-bit/flb_record_accessor.h>
@@ -64,6 +66,15 @@ struct opentelemetry_context {
     struct flb_oauth2 *oauth2_ctx;
     const char *oauth2_auth_method;
 
+    /* Metadata token auth */
+    const char *metadata_token_url;
+    const char *metadata_token_header;
+    int metadata_token_refresh;
+    flb_sds_t metadata_token_path;        /* URL path extracted from metadata_token_url */
+    struct flb_upstream *metadata_u;      /* Non-async upstream for metadata endpoint */
+    pthread_mutex_t metadata_mutex;       /* Lock for metadata fetch operation */
+    int metadata_mutex_initialized;       /* FLB_TRUE when metadata_mutex is ready */
+
     /* AWS Auth */
 #ifdef FLB_HAVE_SIGNV4
 #ifdef FLB_HAVE_AWS
@@ -97,6 +108,7 @@ struct opentelemetry_context {
 
     /* HTTP client */
     struct flb_http_client_ng http_client;
+    int http_client_initialized;
 
     /* record metadata parsing */
     flb_sds_t logs_metadata_key;
