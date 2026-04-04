@@ -246,6 +246,7 @@ int flb_otel_metadata_token_refresh(struct opentelemetry_context *ctx)
         flb_lock_release(&ctx->oauth2_ctx->lock,
                          FLB_LOCK_DEFAULT_RETRY_LIMIT,
                          FLB_LOCK_DEFAULT_RETRY_DELAY);
+        flb_plg_debug(ctx->ins, "metadata: token still valid, skipping refresh");
         pthread_mutex_unlock(&ctx->metadata_mutex);
         return 0;
     }
@@ -394,6 +395,9 @@ int flb_otel_metadata_token_refresh(struct opentelemetry_context *ctx)
                      FLB_LOCK_DEFAULT_RETRY_LIMIT,
                      FLB_LOCK_DEFAULT_RETRY_DELAY);
 
+    flb_plg_debug(ctx->ins,
+                  "metadata: token refreshed, expires in %ld seconds",
+                  (long) effective_ttl);
     pthread_mutex_unlock(&ctx->metadata_mutex);
 
     return 0;
