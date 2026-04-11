@@ -185,30 +185,43 @@ int flb_otel_metadata_token_create(struct opentelemetry_context *ctx,
      * Use '&' if the URL already contains '?', otherwise start with '?'. */
     if (ctx->metadata_token_scope || ctx->metadata_token_audience) {
         const char *sep = strchr(ctx->metadata_token_path, '?') ? "&" : "?";
+        flb_sds_t tmp;
 
         if (ctx->metadata_token_scope) {
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   sep, 1);
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   "scopes=", 7);
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   ctx->metadata_token_scope,
-                                                   strlen(ctx->metadata_token_scope));
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              sep, 1);
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
+
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              "scopes=", sizeof("scopes=") - 1);
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
+
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              ctx->metadata_token_scope,
+                              strlen(ctx->metadata_token_scope));
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
             sep = "&";
         }
 
         if (ctx->metadata_token_audience) {
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   sep, 1);
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   "audience=", 9);
-            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
-                                                   ctx->metadata_token_audience,
-                                                   strlen(ctx->metadata_token_audience));
-        }
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              sep, 1);
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
 
-        if (!ctx->metadata_token_path) {
-            return -1;
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              "audience=", sizeof("audience=") - 1);
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
+
+            tmp = flb_sds_cat(ctx->metadata_token_path,
+                              ctx->metadata_token_audience,
+                              strlen(ctx->metadata_token_audience));
+            if (!tmp) { return -1; }
+            ctx->metadata_token_path = tmp;
         }
     }
 

@@ -49,6 +49,7 @@ void flb_test_metadata_token_scope_query_param(void);
 void flb_test_metadata_token_audience_query_param(void);
 void flb_test_metadata_token_both_query_params(void);
 void flb_test_metadata_token_scope_without_url_ignored(void);
+void flb_test_metadata_token_scope_url_with_existing_query(void);
 
 /* Test list */
 TEST_LIST = {
@@ -81,6 +82,8 @@ TEST_LIST = {
         flb_test_metadata_token_both_query_params},
     {"metadata_token_scope_without_url_ignored",
         flb_test_metadata_token_scope_without_url_ignored},
+    {"metadata_token_scope_url_with_existing_query",
+        flb_test_metadata_token_scope_url_with_existing_query},
     {NULL, NULL}
 };
 
@@ -1718,6 +1721,60 @@ void flb_test_metadata_token_scope_without_url_ignored(void)
         /* No metadata_token_url: no oauth2 context and no path should be set */
         TEST_CHECK(otel_ctx->oauth2_ctx == NULL);
         TEST_CHECK(otel_ctx->metadata_token_path == NULL);
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
+}
+
+/*
+ * Test: when metadata_token_url already contains '?', scope uses '&' separator.
+ */
+void flb_test_metadata_token_scope_url_with_existing_query(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                "test",
+                   "host",                 "127.0.0.1",
+                   "port",                 "14317",
+                   "metadata_token_url",   "http://169.254.169.254/metadata/token?format=json",
+                   "metadata_token_scope", "cloud-platform",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        TEST_CHECK(otel_ctx->metadata_token_path != NULL);
+        if (otel_ctx->metadata_token_path) {
+            /* URL already has '?', so scope must use '&' not '?' */
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path,
+                              "&scopes=cloud-platform") != NULL);
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path,
+                              "?scopes=") == NULL);
+        }
     }
 
     flb_stop(ctx);
