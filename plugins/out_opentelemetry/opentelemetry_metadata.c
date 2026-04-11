@@ -182,12 +182,14 @@ int flb_otel_metadata_token_create(struct opentelemetry_context *ctx,
     }
 
     /* Append optional scope and audience as query parameters to the path.
-     * Use '&' if the URL already contains '?', otherwise start with '?'. */
-    if (ctx->metadata_token_scope || ctx->metadata_token_audience) {
+     * Use '&' if the URL already contains '?', otherwise start with '?'.
+     * Empty-string values are treated as unset (no parameter appended). */
+    if ((ctx->metadata_token_scope   && ctx->metadata_token_scope[0]   != '\0') ||
+        (ctx->metadata_token_audience && ctx->metadata_token_audience[0] != '\0')) {
         const char *sep = strchr(ctx->metadata_token_path, '?') ? "&" : "?";
         flb_sds_t tmp;
 
-        if (ctx->metadata_token_scope) {
+        if (ctx->metadata_token_scope && ctx->metadata_token_scope[0] != '\0') {
             tmp = flb_sds_cat(ctx->metadata_token_path,
                               sep, 1);
             if (!tmp) { return -1; }
@@ -206,7 +208,7 @@ int flb_otel_metadata_token_create(struct opentelemetry_context *ctx,
             sep = "&";
         }
 
-        if (ctx->metadata_token_audience) {
+        if (ctx->metadata_token_audience && ctx->metadata_token_audience[0] != '\0') {
             tmp = flb_sds_cat(ctx->metadata_token_path,
                               sep, 1);
             if (!tmp) { return -1; }
