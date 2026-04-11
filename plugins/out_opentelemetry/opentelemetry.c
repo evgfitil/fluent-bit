@@ -1385,6 +1385,16 @@ static struct flb_config_map config_map[] = {
      0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_refresh),
      "Maximum token refresh interval in seconds (default: 3600, must be > 60)"
     },
+    {
+     FLB_CONFIG_MAP_STR, "metadata_token_scope", NULL,
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_scope),
+     "Scope value appended as ?scopes=<value> to metadata token GET request"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "metadata_token_audience", NULL,
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, metadata_token_audience),
+     "Audience value appended as ?audience=<value> to metadata token GET request"
+    },
 
     /* EOF */
     {0}

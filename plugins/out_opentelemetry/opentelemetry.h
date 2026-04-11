@@ -70,6 +70,8 @@ struct opentelemetry_context {
     const char *metadata_token_url;
     const char *metadata_token_header;
     int metadata_token_refresh;
+    const char *metadata_token_scope;     /* Optional scope appended as ?scopes=<value> */
+    const char *metadata_token_audience;  /* Optional audience appended as ?audience=<value> */
     flb_sds_t metadata_token_path;        /* URL path extracted from metadata_token_url */
     struct flb_upstream *metadata_u;      /* Non-async upstream for metadata endpoint */
     pthread_mutex_t metadata_mutex;       /* Lock for metadata fetch operation */
