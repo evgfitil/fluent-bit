@@ -45,6 +45,10 @@ void flb_test_metadata_token_401_recovery(void);
 void flb_test_metadata_token_refresh_interval_override(void);
 void flb_test_metadata_token_missing_expires_in(void);
 void flb_test_metadata_token_short_expires_in(void);
+void flb_test_metadata_token_scope_query_param(void);
+void flb_test_metadata_token_audience_query_param(void);
+void flb_test_metadata_token_both_query_params(void);
+void flb_test_metadata_token_scope_without_url_ignored(void);
 
 /* Test list */
 TEST_LIST = {
@@ -69,6 +73,14 @@ TEST_LIST = {
         flb_test_metadata_token_missing_expires_in},
     {"metadata_token_short_expires_in",
         flb_test_metadata_token_short_expires_in},
+    {"metadata_token_scope_query_param",
+        flb_test_metadata_token_scope_query_param},
+    {"metadata_token_audience_query_param",
+        flb_test_metadata_token_audience_query_param},
+    {"metadata_token_both_query_params",
+        flb_test_metadata_token_both_query_params},
+    {"metadata_token_scope_without_url_ignored",
+        flb_test_metadata_token_scope_without_url_ignored},
     {NULL, NULL}
 };
 
@@ -1503,4 +1515,211 @@ void flb_test_metadata_token_short_expires_in(void)
     flb_stop(ctx);
     flb_destroy(ctx);
     mock_meta_stop(mk);
+}
+
+/*
+ * Test: metadata_token_scope appends ?scopes=<value> to the metadata GET path.
+ */
+void flb_test_metadata_token_scope_query_param(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                "test",
+                   "host",                 "127.0.0.1",
+                   "port",                 "14317",
+                   "metadata_token_url",   "http://169.254.169.254/metadata/token",
+                   "metadata_token_scope", "https://www.googleapis.com/auth/cloud-platform",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        TEST_CHECK(otel_ctx->metadata_token_path != NULL);
+        if (otel_ctx->metadata_token_path) {
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path,
+                              "?scopes=https://www.googleapis.com/auth/cloud-platform")
+                       != NULL);
+        }
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
+}
+
+/*
+ * Test: metadata_token_audience appends ?audience=<value> to the metadata GET path.
+ */
+void flb_test_metadata_token_audience_query_param(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                   "test",
+                   "host",                    "127.0.0.1",
+                   "port",                    "14317",
+                   "metadata_token_url",      "http://169.254.169.254/metadata/token",
+                   "metadata_token_audience", "my-service-account@project.iam.gserviceaccount.com",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        TEST_CHECK(otel_ctx->metadata_token_path != NULL);
+        if (otel_ctx->metadata_token_path) {
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path,
+                              "?audience=my-service-account@project.iam.gserviceaccount.com")
+                       != NULL);
+        }
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
+}
+
+/*
+ * Test: setting both metadata_token_scope and metadata_token_audience appends
+ * ?scopes=<scope>&audience=<audience> to the metadata GET path.
+ */
+void flb_test_metadata_token_both_query_params(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                   "test",
+                   "host",                    "127.0.0.1",
+                   "port",                    "14317",
+                   "metadata_token_url",      "http://169.254.169.254/metadata/token",
+                   "metadata_token_scope",    "cloud-platform",
+                   "metadata_token_audience", "my-audience",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        TEST_CHECK(otel_ctx->metadata_token_path != NULL);
+        if (otel_ctx->metadata_token_path) {
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path,
+                              "?scopes=cloud-platform&audience=my-audience")
+                       != NULL);
+        }
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
+}
+
+/*
+ * Test: setting metadata_token_scope without metadata_token_url does not crash;
+ * the plugin starts normally without any metadata token context.
+ */
+void flb_test_metadata_token_scope_without_url_ignored(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                "test",
+                   "host",                 "127.0.0.1",
+                   "port",                 "14317",
+                   "metadata_token_scope", "https://www.googleapis.com/auth/cloud-platform",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        /* No metadata_token_url: no oauth2 context and no path should be set */
+        TEST_CHECK(otel_ctx->oauth2_ctx == NULL);
+        TEST_CHECK(otel_ctx->metadata_token_path == NULL);
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
 }
