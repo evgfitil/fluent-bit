@@ -181,6 +181,37 @@ int flb_otel_metadata_token_create(struct opentelemetry_context *ctx,
         return -1;
     }
 
+    /* Append optional scope and audience as query parameters to the path.
+     * Use '&' if the URL already contains '?', otherwise start with '?'. */
+    if (ctx->metadata_token_scope || ctx->metadata_token_audience) {
+        const char *sep = strchr(ctx->metadata_token_path, '?') ? "&" : "?";
+
+        if (ctx->metadata_token_scope) {
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   sep, 1);
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   "scopes=", 7);
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   ctx->metadata_token_scope,
+                                                   strlen(ctx->metadata_token_scope));
+            sep = "&";
+        }
+
+        if (ctx->metadata_token_audience) {
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   sep, 1);
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   "audience=", 9);
+            ctx->metadata_token_path = flb_sds_cat(ctx->metadata_token_path,
+                                                   ctx->metadata_token_audience,
+                                                   strlen(ctx->metadata_token_audience));
+        }
+
+        if (!ctx->metadata_token_path) {
+            return -1;
+        }
+    }
+
     /* Create a synchronous (non-async) upstream for the metadata endpoint */
     ctx->metadata_u = flb_upstream_create_url(config, ctx->metadata_token_url,
                                               FLB_IO_TCP, NULL);
