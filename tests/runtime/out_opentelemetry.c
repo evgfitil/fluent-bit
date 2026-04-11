@@ -51,6 +51,7 @@ void flb_test_metadata_token_both_query_params(void);
 void flb_test_metadata_token_scope_without_url_ignored(void);
 void flb_test_metadata_token_scope_url_with_existing_query(void);
 void flb_test_metadata_token_audience_url_with_existing_query(void);
+void flb_test_metadata_token_empty_scope_ignored(void);
 
 /* Test list */
 TEST_LIST = {
@@ -87,6 +88,8 @@ TEST_LIST = {
         flb_test_metadata_token_scope_url_with_existing_query},
     {"metadata_token_audience_url_with_existing_query",
         flb_test_metadata_token_audience_url_with_existing_query},
+    {"metadata_token_empty_scope_ignored",
+        flb_test_metadata_token_empty_scope_ignored},
     {NULL, NULL}
 };
 
@@ -1833,6 +1836,58 @@ void flb_test_metadata_token_audience_url_with_existing_query(void)
                               "&audience=my-audience") != NULL);
             TEST_CHECK(strstr(otel_ctx->metadata_token_path,
                               "?audience=") == NULL);
+        }
+    }
+
+    flb_stop(ctx);
+    flb_destroy(ctx);
+}
+
+/*
+ * Test: an empty metadata_token_scope is treated as unset -- no ?scopes= appended.
+ * Exercises the [0] != '\0' guard in flb_otel_metadata_token_create().
+ */
+void flb_test_metadata_token_empty_scope_ignored(void)
+{
+    int ret;
+    flb_ctx_t *ctx;
+    int in_ffd;
+    int out_ffd;
+    struct opentelemetry_context *otel_ctx;
+
+    ctx = flb_create();
+    TEST_CHECK(ctx != NULL);
+
+    flb_service_set(ctx,
+                    "Flush",     "10",
+                    "Grace",     "1",
+                    "Log_Level", "error",
+                    NULL);
+
+    in_ffd = flb_input(ctx, (char *) "lib", NULL);
+    TEST_CHECK(in_ffd >= 0);
+    flb_input_set(ctx, in_ffd, "tag", "test", NULL);
+
+    out_ffd = flb_output(ctx, (char *) "opentelemetry", NULL);
+    TEST_CHECK(out_ffd >= 0);
+    flb_output_set(ctx, out_ffd,
+                   "match",                "test",
+                   "host",                 "127.0.0.1",
+                   "port",                 "14317",
+                   "metadata_token_url",   "http://169.254.169.254/metadata/token",
+                   "metadata_token_scope", "",
+                   NULL);
+
+    ret = flb_start(ctx);
+    TEST_CHECK(ret == 0);
+
+    otel_ctx = get_otel_ctx(ctx, out_ffd);
+    TEST_CHECK(otel_ctx != NULL);
+    if (otel_ctx) {
+        TEST_CHECK(otel_ctx->metadata_token_path != NULL);
+        if (otel_ctx->metadata_token_path) {
+            /* empty scope must not append scopes= query parameter */
+            TEST_CHECK(strstr(otel_ctx->metadata_token_path, "scopes=") == NULL);
         }
     }
 
