@@ -32,6 +32,7 @@
 
 #include "opentelemetry.h"
 #include "opentelemetry_conf.h"
+#include "opentelemetry_metadata.h"
 
 /* create a single entry of log_body_key */
 static int log_body_key_create(struct opentelemetry_context *ctx, char *ra_pattern)
@@ -303,6 +304,14 @@ struct opentelemetry_context *flb_opentelemetry_context_create(struct flb_output
         }
     }
 
+    /* metadata_token_url and standard OAuth2 are mutually exclusive */
+    if (ctx->metadata_token_url && ctx->oauth2_config.enabled == FLB_TRUE) {
+        flb_plg_error(ins,
+                      "metadata_token_url and oauth2 cannot be used at the same time");
+        flb_opentelemetry_context_destroy(ctx);
+        return NULL;
+    }
+
     if (ctx->max_resources < 0) {
         flb_plg_error(ins, "max_resources must be greater than or equal to zero");
         flb_opentelemetry_context_destroy(ctx);
@@ -458,6 +467,45 @@ struct opentelemetry_context *flb_opentelemetry_context_create(struct flb_output
         ctx->oauth2_ctx = flb_oauth2_create_from_config(config, &ctx->oauth2_config);
         if (!ctx->oauth2_ctx) {
             flb_plg_error(ctx->ins, "failed to initialize oauth2 context");
+            flb_opentelemetry_context_destroy(ctx);
+            return NULL;
+        }
+    }
+
+    /* metadata token mode: create a minimal oauth2 context for Bearer injection */
+    if (ctx->metadata_token_url) {
+        /*
+         * metadata_token_refresh must exceed FLB_OAUTH2_DEFAULT_SKEW_SECS.
+         * Lower values cause the oauth2 layer to treat every freshly-fetched
+         * token as expired, triggering a POST refresh that always fails -
+         * no data is ever delivered.
+         */
+        if (ctx->metadata_token_refresh <= FLB_OAUTH2_DEFAULT_SKEW_SECS) {
+            flb_plg_error(ctx->ins,
+                          "metadata_token_refresh must be > %d seconds",
+                          FLB_OAUTH2_DEFAULT_SKEW_SECS);
+            flb_opentelemetry_context_destroy(ctx);
+            return NULL;
+        }
+
+        ctx->oauth2_ctx = flb_oauth2_create(config,
+                                            ctx->metadata_token_url,
+                                            ctx->metadata_token_refresh);
+        if (!ctx->oauth2_ctx) {
+            flb_plg_error(ctx->ins,
+                          "failed to create oauth2 context for metadata token auth");
+            flb_opentelemetry_context_destroy(ctx);
+            return NULL;
+        }
+        ctx->oauth2_config.enabled = FLB_TRUE;
+        /*
+         * oauth2_apply_defaults() hard-sets cfg.enabled = FLB_FALSE; override it
+         * so that flb_oauth2_get_access_token() returns the pre-fetched token
+         * instead of bailing out immediately with -1.
+         */
+        ctx->oauth2_ctx->cfg.enabled = FLB_TRUE;
+
+        if (flb_otel_metadata_token_create(ctx, config) != 0) {
             flb_opentelemetry_context_destroy(ctx);
             return NULL;
         }
@@ -758,6 +806,9 @@ struct opentelemetry_context *flb_opentelemetry_context_create(struct flb_output
 
         ctx = NULL;
     }
+    else {
+        ctx->http_client_initialized = FLB_TRUE;
+    }
 
     return ctx;
 }
@@ -768,7 +819,9 @@ void flb_opentelemetry_context_destroy(struct opentelemetry_context *ctx)
         return;
     }
 
-    flb_http_client_ng_destroy(&ctx->http_client);
+    if (ctx->http_client_initialized) {
+        flb_http_client_ng_destroy(&ctx->http_client);
+    }
 
     flb_kv_release(&ctx->kv_labels);
 
@@ -903,10 +956,11 @@ void flb_opentelemetry_context_destroy(struct opentelemetry_context *ctx)
 #endif
 #endif
 
+    flb_otel_metadata_token_destroy(ctx);
+
     if (ctx->oauth2_ctx) {
         flb_oauth2_destroy(ctx->oauth2_ctx);
     }
-    flb_oauth2_config_destroy(&ctx->oauth2_config);
 
     flb_free(ctx->proxy_host);
     flb_free(ctx);

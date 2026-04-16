@@ -260,6 +260,7 @@ if(FLB_IN_LIB)
   FLB_RT_TEST(FLB_OUT_TD                "out_td.c")
   FLB_RT_TEST(FLB_OUT_INFLUXDB          "out_influxdb.c")
   FLB_RT_TEST(FLB_OUT_CHRONICLE         "out_chronicle.c")
+  FLB_RT_TEST(FLB_OUT_OPENTELEMETRY     "out_opentelemetry.c")
 
 endif()
 
